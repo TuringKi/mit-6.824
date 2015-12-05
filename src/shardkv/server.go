@@ -71,7 +71,6 @@ func (kv *ShardKV) Synchronize(max_seq int) {
 				kv.decoder.Decode(&op)
 				if op.Type != GetFlag && op.Type != ReconfigFlag {
 					if _, duplicate := kv.request_number[op.Uid]; !duplicate {
-						//fmt.Println("Decided", kv.me, op.Type, op.Key, op.Value)
 						switch op.Type {
 						case PutFlag:
 							kv.data[op.Key] = op.Value
@@ -189,10 +188,12 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) error {
 }
 
 func (kv *ShardKV) Reconfiguration(args *ReconfigArgs, reply *ReconfigReply) error {
-	fmt.Println("start", kv.me, kv.gid)
+	if kv.config_num < args.Num {
+		reply.Err = FallBehind
+		return nil
+	}
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
-	fmt.Println("end", kv.me, kv.gid)
 
 	op := Op{
 		Type:  ReconfigFlag,
@@ -202,23 +203,6 @@ func (kv *ShardKV) Reconfiguration(args *ReconfigArgs, reply *ReconfigReply) err
 	}
 
 	kv.reachAgreement(op)
-
-	//update the configuration
-	config := kv.sm.Query(args.Num)
-
-	for s, k := range config.Shards {
-		_, exist := kv.shards[s]
-		if k == kv.gid {
-			if !exist {
-				kv.shards[s] = true
-			}
-		} else {
-			if exist {
-				delete(kv.shards, s)
-			}
-		}
-	}
-	kv.config_num = config.Num
 
 	reply.Data = make(map[string]string)
 	for k, v := range kv.data {
@@ -237,10 +221,9 @@ func (kv *ShardKV) Reconfiguration(args *ReconfigArgs, reply *ReconfigReply) err
 	return nil
 }
 
-func (kv *ShardKV) updateConfiguration(num int) {
+func (kv *ShardKV) updateConfiguration() {
 	old_config := kv.sm.Query(kv.config_num)
-	config := kv.sm.Query(num)
-	//fmt.Println("config", kv.config_num, config.Num, old_config.Groups)
+	config := kv.sm.Query(kv.config_num + 1)
 
 	if reflect.DeepEqual(config, old_config) {
 		return
@@ -249,26 +232,16 @@ func (kv *ShardKV) updateConfiguration(num int) {
 	shards_server := make(map[int64][]string)
 	for s, k := range config.Shards {
 		_, exist := kv.shards[s]
-		if k == kv.gid {
-			if !exist {
-				//fmt.Println("config", kv.me, kv.gid, kv.config_num, old_config.Groups[k])
-				k = old_config.Shards[s]
-				if _, ok := old_config.Groups[k]; ok {
-					new_shards[k] = append(new_shards[k], s)
-					shards_server[k] = old_config.Groups[k]
-				}
-				kv.shards[s] = true
-			}
-		} else {
-			if exist {
-				delete(kv.shards, s)
+		if k == kv.gid && !exist {
+			k = old_config.Shards[s]
+			if _, ok := old_config.Groups[k]; ok {
+				new_shards[k] = append(new_shards[k], s)
+				shards_server[k] = old_config.Groups[k]
 			}
 		}
 	}
 
-	kv.config_num = config.Num
-
-	//fmt.Println(kv.me, kv.gid, kv.config_num, kv.shards)
+	succeed := false
 	if len(new_shards) != 0 {
 		var args ReconfigArgs
 		args.Num = kv.config_num
@@ -290,10 +263,29 @@ func (kv *ShardKV) updateConfiguration(num int) {
 					for k, v := range reply.RequestNumber {
 						kv.request_number[k] = v
 					}
+					succeed = true
 					break
+				}
+				time.Sleep(250 * time.Millisecond)
+			}
+		}
+	} else {
+		succeed = true
+	}
+	if succeed {
+		for s, k := range config.Shards {
+			_, exist := kv.shards[s]
+			if k == kv.gid {
+				if !exist {
+					kv.shards[s] = true
+				}
+			} else {
+				if exist {
+					delete(kv.shards, s)
 				}
 			}
 		}
+		kv.config_num = config.Num
 	}
 }
 
@@ -305,7 +297,7 @@ func (kv *ShardKV) tick() {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 
-	kv.updateConfiguration(-1)
+	kv.updateConfiguration()
 
 }
 

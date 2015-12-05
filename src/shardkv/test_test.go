@@ -119,7 +119,7 @@ func setup(t *testing.T, tag string, unreliable bool) *tCluster {
 	return tc
 }
 
-func BTestBasic(t *testing.T) {
+func TestBasic(t *testing.T) {
 	tc := setup(t, "basic", false)
 	defer tc.cleanup()
 
@@ -177,7 +177,7 @@ func BTestBasic(t *testing.T) {
 	fmt.Printf("  ... Passed\n")
 }
 
-func BTestMove(t *testing.T) {
+func TestMove(t *testing.T) {
 	tc := setup(t, "move", false)
 	defer tc.cleanup()
 
@@ -235,7 +235,7 @@ func BTestMove(t *testing.T) {
 	}
 }
 
-func BTestLimp(t *testing.T) {
+func TestLimp(t *testing.T) {
 	tc := setup(t, "limp", false)
 	defer tc.cleanup()
 
